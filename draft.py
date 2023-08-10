@@ -7,6 +7,7 @@ import csv
 from prompt_toolkit import prompt
 from prompt_toolkit.completion import WordCompleter
 import streamlit as st
+import math
 
 draft_position = 0
 
@@ -40,8 +41,6 @@ def load_fantasy_data(csv_path):
     # Step 2: Add a new column to the DataFrame
     df['is_drafted'] = 0
     df['draft_order'] = ''
-    df['my_team'] = ''
-    df['my_team_round'] = ''
     df = df.sort_values(by='ProjectedFantasyPoints', ascending=False)
 
     # Step 3: Write the DataFrame back to the CSV
@@ -63,7 +62,7 @@ def get_next_best_available(data, position):
     # Return the top available player
     return sorted_players.iloc[0]
 
-def set_draft_status(df, player_name, is_drafted=True, to_my_team=False, draft_round=None):
+def set_draft_status(df, player_name, is_drafted=True):
     """Set the draft status of a player."""
     player_index = df[df['Name'] == player_name].index[0]
     df.at[player_index, 'is_drafted'] = is_drafted
@@ -73,18 +72,20 @@ def set_draft_status(df, player_name, is_drafted=True, to_my_team=False, draft_r
         max_order = df['draft_order'].max()
         next_order = 1 if pd.isna(max_order) else max_order + 1
         df.at[player_index, 'draft_order'] = next_order
-    
-    if to_my_team:
-        df.at[player_index, 'my_team'] = True
-        if draft_round:
-            df.at[player_index, 'my_team_round'] = draft_round
 
 # Streamlit
 def main():
     st.title("Fantasy Football Draft Assistant")
 
+    num_users = st.number_input('Enter the number of users in the draft:', min_value=2, value=10)
+    my_draft_position = st.number_input('Enter your draft position:', min_value=1, max_value=num_users, value=1)
+
     # Load data
     fantasy_data = load_fantasy_data(csv_path)
+
+    # Calculate the current draft round for your team
+    total_drafted_players = fantasy_data[fantasy_data['is_drafted'] == True].shape[0]
+    current_round = math.ceil((total_drafted_players + 1) / num_users)
 
     # Create an input box for search
     search_query = st.text_input("Search by player or position:")
@@ -106,7 +107,7 @@ def main():
         
         # Modify display of drafted players based on 'my_team' flag
         drafted_players['Display'] = drafted_players.apply(
-            lambda row: f"🏈 {row['Name']} - {row['Position']}" if row.get('my_team', False) else f"{row['Name']} - {row['Position']}",
+            lambda row: f"{row['Name']} - {row['Position']}",
             axis=1
         )
         
@@ -114,6 +115,28 @@ def main():
         st.table(drafted_players['Display'])
 
 
+    # Calculate upcoming draft turns based on your position and the snake draft pattern
+    def calculate_draft_turns(my_position, num_teams, num_rounds=10):
+        turns = []
+        for round_num in range(1, num_rounds + 1):
+            if round_num % 2 == 1:  # Odd rounds
+                turn = (round_num - 1) * num_teams + my_position
+            else:  # Even rounds (snake draft)
+                turn = round_num * num_teams - (my_position - 1)
+            turns.append(turn)
+        return turns
+
+    upcoming_turns = calculate_draft_turns(my_draft_position, num_users)
+
+    # Suggest players for each upcoming turn
+    suggestions = {}
+    for turn in upcoming_turns:
+        available_players = fantasy_data[(fantasy_data['is_drafted'] == False)].sort_values(by='ProjectedFantasyPoints', ascending=False)
+        # Check if there are still players available
+        if not available_players.empty:
+            # Suggest the highest projected player who is still available around that turn
+            suggested_player = available_players.iloc[min(turn, len(available_players) - 1)]
+            suggestions[turn] = suggested_player['Name']
     
     # Initialize session state variable for drafted player name
     if 'drafted_name' not in st.session_state:
@@ -122,26 +145,26 @@ def main():
     # Display the top 20 filtered results with draft buttons
     for index, row in top_20_players.iterrows():
         col1, col2, col3 = st.columns(3)
-        with col1:
-            st.write(f"{row['Name']} - {row['Position']} - {row['ProjectedFantasyPoints']} points - {row['AverageDraftPositionPPR']} ADP - {row['ByeWeek']} bye")
+
+        # Check if player is among the suggested players for upcoming turns
+        player_name = row['Name']
+        player_details = f"{player_name} - {row['Position']} - {row['ProjectedFantasyPoints']} points - {row['AverageDraftPositionPPR']} ADP - {row['ByeWeek']} bye"
+        if player_name in suggestions.values():
+            # Use Markdown to bold and color the player's name
+            player_display = f"**<span style='color:red;'>{player_details}</span>**"
+            with col1:
+                st.markdown(player_display, unsafe_allow_html=True)
+        else:
+            with col1:
+                st.write(player_details)
+
         with col2:
             # Add a draft button for each player
-            draft_button = st.button(f"Draft {row['Name']}", key=row['Name'])
+            draft_button = st.button(f"Draft {player_name}", key=row['Name'])
             if draft_button:
-                set_draft_status(fantasy_data, row['Name'], True, to_my_team=False)
+                set_draft_status(fantasy_data, player_name, True)
                 fantasy_data.to_csv(csv_path, index=False)
-                st.write(f"{row['Name']} has been drafted!")
-        with col3:
-            # Add a "Draft to My Team" button for each player
-            my_team_button = st.button(f"Draft to My Team", key=f"MyTeam_{row['Name']}")
-            if my_team_button:
-                # Determine the current draft round for your team
-                current_round = fantasy_data[fantasy_data['my_team'] == True].shape[0] + 1
-
-                # When the "Draft to My Team" button is clicked:
-                set_draft_status(fantasy_data, row['Name'], True, to_my_team=True, draft_round=current_round)
-                fantasy_data.to_csv(csv_path, index=False)
-                st.write(f"{row['Name']} has been drafted to your team!")
+                st.write(f"{player_name} has been drafted!")
 
     # Check if a player has been drafted and update the data accordingly
     if st.session_state.drafted_name:
