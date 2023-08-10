@@ -135,6 +135,9 @@ def main():
         & (fantasy_data['is_drafted'] == False)
     ]
 
+    # Sort by ProjectedFantasyPoints and get the top 20 players
+    top_20_players = filtered_data.sort_values(by='ProjectedFantasyPoints', ascending=False).head(20)
+
     # Display drafted players in a separate table, sorted by draft order
     drafted_players = fantasy_data[fantasy_data['is_drafted'] == True].sort_values(by='draft_order')
     if not drafted_players.empty:
@@ -146,15 +149,17 @@ def main():
         st.session_state.drafted_name = None
 
     # Display filtered results with draft buttons
-    for index, row in filtered_data.iterrows():
+    for index, row in top_20_players.iterrows():
         col1, col2 = st.columns(2)
         with col1:
             st.write(f"{row['Name']} - {row['Position']} - {row['ProjectedFantasyPoints']} points")
         with col2:
-            # Add a draft button for each undrafted player
+            # Add a draft button for each player
             draft_button = st.button(f"Draft {row['Name']}", key=row['Name'])
             if draft_button:
-                st.session_state.drafted_name = row['Name']
+                set_draft_status(fantasy_data, row['Name'], True)
+                fantasy_data.to_csv(csv_path, index=False)
+                st.write(f"{row['Name']} has been drafted!")
 
     # Check if a player has been drafted and update the data accordingly
     if st.session_state.drafted_name:
