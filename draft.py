@@ -15,7 +15,7 @@ url = "https://api.sportsdata.io/v3/nfl/stats/json/FantasyPlayers?key=3a51824458
 response = requests.get(url)
 data = response.json()
 
-csv_path = "/Users/coley/Downloads/fantasy_players.csv"
+csv_path = "./fantasy_players.csv"
 
 # Open a CSV file for writing
 with open(csv_path, 'w', newline='') as csvfile:
