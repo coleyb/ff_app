@@ -40,6 +40,8 @@ def load_fantasy_data(csv_path):
     # Step 2: Add a new column to the DataFrame
     df['is_drafted'] = 0
     df['draft_order'] = ''
+    df['my_team'] = ''
+    df['my_team_round'] = ''
     df = df.sort_values(by='ProjectedFantasyPoints', ascending=False)
 
     # Step 3: Write the DataFrame back to the CSV
@@ -61,63 +63,21 @@ def get_next_best_available(data, position):
     # Return the top available player
     return sorted_players.iloc[0]
 
-def set_draft_status(df, player_name, is_drafted=True):
+def set_draft_status(df, player_name, is_drafted=True, to_my_team=False, draft_round=None):
     """Set the draft status of a player."""
     player_index = df[df['Name'] == player_name].index[0]
     df.at[player_index, 'is_drafted'] = is_drafted
+    
     if is_drafted:
         # If the player is being drafted, set their draft order
         max_order = df['draft_order'].max()
         next_order = 1 if pd.isna(max_order) else max_order + 1
         df.at[player_index, 'draft_order'] = next_order
-
-# if __name__ == "__main__":
-#     # Load the fantasy data
-#     fantasy_data = load_fantasy_data("csv_path")
     
-#     # Setup typeahead for player names
-#     player_completer = WordCompleter(list(fantasy_data['Name']), ignore_case=True)
-    
-#     while True:
-#         # Check if any players remain undrafted
-#         if fantasy_data['is_drafted'].all():
-#             print("All players have been drafted!")
-#             break
-        
-#         # Prompt the user for the desired position, exit, or a player's name that someone else has drafted
-#         user_input = prompt("Enter the position you want to draft (e.g., QB, RB, WR, TE, K, DEF), 'exit' to stop, or type in a player's name that someone else has drafted: ", completer=player_completer).strip().upper()
-        
-#         if user_input == "EXIT":
-#             print("Exiting the draft.")
-#             break
-        
-#         # If the user input matches a player's name
-#         elif user_input.title() in fantasy_data['Name'].values:
-#             set_draft_status(fantasy_data, user_input.title(), True)
-#             # Save the updated DataFrame back to the CSV
-#             fantasy_data.to_csv("csv_path", index=False)
-#             print(f"{user_input.title()} has been drafted by someone else!")
-#             continue
-        
-#         # If the user input is a position
-#         else:
-#             # Get the next best available player for the specified position
-#             best_available = get_next_best_available(fantasy_data, user_input)
-            
-#             if best_available is None:  # If no available players for the specified position
-#                 print(f"No available players for position {user_input}")
-#                 continue
-            
-#             print(f"Next best available player for position {user_input}: {best_available['Name']} (Projected Points: {best_available['ProjectedFantasyPoints']})")
-            
-#             # Prompt user to set the is_drafted flag for the suggested player
-#             draft_decision = input(f"Do you want to draft {best_available['Name']}? (yes/no): ").strip().lower()
-            
-#             if draft_decision == 'yes':
-#                 set_draft_status(fantasy_data, best_available['Name'], True)
-#                 # Save the updated DataFrame back to the CSV
-#                 fantasy_data.to_csv("csv_path", index=False)
-#                 print(f"{best_available['Name']} has been drafted!")
+    if to_my_team:
+        df.at[player_index, 'my_team'] = True
+        if draft_round:
+            df.at[player_index, 'my_team_round'] = draft_round
 
 # Streamlit
 def main():
@@ -140,26 +100,48 @@ def main():
 
     # Display drafted players in a separate table, sorted by draft order
     drafted_players = fantasy_data[fantasy_data['is_drafted'] == True].sort_values(by='draft_order')
+
     if not drafted_players.empty:
         st.subheader("Drafted Players")
-        st.table(drafted_players[['Name', 'Position', 'draft_order']])
+        
+        # Modify display of drafted players based on 'my_team' flag
+        drafted_players['Display'] = drafted_players.apply(
+            lambda row: f"🏈 {row['Name']} - {row['Position']}" if row.get('my_team', False) else f"{row['Name']} - {row['Position']}",
+            axis=1
+        )
+        
+        # Display only the modified 'Display' column
+        st.table(drafted_players['Display'])
+
+
     
     # Initialize session state variable for drafted player name
     if 'drafted_name' not in st.session_state:
         st.session_state.drafted_name = None
 
-    # Display filtered results with draft buttons
+    # Display the top 20 filtered results with draft buttons
     for index, row in top_20_players.iterrows():
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         with col1:
             st.write(f"{row['Name']} - {row['Position']} - {row['ProjectedFantasyPoints']} points - {row['AverageDraftPositionPPR']} ADP - {row['ByeWeek']} bye")
         with col2:
             # Add a draft button for each player
             draft_button = st.button(f"Draft {row['Name']}", key=row['Name'])
             if draft_button:
-                set_draft_status(fantasy_data, row['Name'], True)
+                set_draft_status(fantasy_data, row['Name'], True, to_my_team=False)
                 fantasy_data.to_csv(csv_path, index=False)
                 st.write(f"{row['Name']} has been drafted!")
+        with col3:
+            # Add a "Draft to My Team" button for each player
+            my_team_button = st.button(f"Draft to My Team", key=f"MyTeam_{row['Name']}")
+            if my_team_button:
+                # Determine the current draft round for your team
+                current_round = fantasy_data[fantasy_data['my_team'] == True].shape[0] + 1
+
+                # When the "Draft to My Team" button is clicked:
+                set_draft_status(fantasy_data, row['Name'], True, to_my_team=True, draft_round=current_round)
+                fantasy_data.to_csv(csv_path, index=False)
+                st.write(f"{row['Name']} has been drafted to your team!")
 
     # Check if a player has been drafted and update the data accordingly
     if st.session_state.drafted_name:
