@@ -152,7 +152,7 @@ def main():
     for index, row in top_20_players.iterrows():
         col1, col2 = st.columns(2)
         with col1:
-            st.write(f"{row['Name']} - {row['Position']} - {row['ProjectedFantasyPoints']} points")
+            st.write(f"{row['Name']} - {row['Position']} - {row['ProjectedFantasyPoints']} points - {row['AverageDraftPositionPPR']} ADP - {row['ByeWeek']} bye")
         with col2:
             # Add a draft button for each player
             draft_button = st.button(f"Draft {row['Name']}", key=row['Name'])
