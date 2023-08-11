@@ -60,28 +60,22 @@ def get_next_best_available(data, position):
     # Return the top available player
     return sorted_players.iloc[0]
 
-def set_draft_status(df, player_name, drafted=True, to_my_team=False):
-    """
-    Function to set a player's draft status in the DataFrame.
-    If drafted, it will also set the draft order.
-    """
-    idx = df[df['Name'] == player_name].index[0]
+def set_draft_status(df, player_name, drafted, to_my_team=False, my_draft_position=None, num_users=None):
+    player_index = df[df['Name'] == player_name].index[0]
+    df.at[player_index, 'is_drafted'] = drafted
     
-    # Set the draft status
-    df.at[idx, 'is_drafted'] = drafted
-
-    # If the player is drafted, set the draft order
     if drafted:
         max_order = df['draft_order'].max()
-        if pd.isna(max_order) or max_order == '':
-            next_order = 1
-        else:
-            next_order = int(max_order) + 1
-        df.at[idx, 'draft_order'] = next_order
-
-    # If the player is drafted to "my team", set the 'my_team' flag
-    if to_my_team:
-        df.at[idx, 'my_team'] = True
+        next_order = 1 if pd.isna(max_order) else int(max_order) + 1
+        df.at[player_index, 'draft_order'] = next_order
+        
+        # Check if the player should be on "my team"
+        current_pick = int(next_order)
+        if to_my_team or (current_pick % num_users == my_draft_position):
+            df.at[player_index, 'my_team'] = True
+    else:
+        df.at[player_index, 'draft_order'] = None
+        df.at[player_index, 'my_team'] = False
 
 
 def suggest_pick(df, my_draft_position, num_users):
@@ -213,18 +207,18 @@ def main():
             # Add a draft button for each player
             draft_button = st.button(f"Draft {player_name}", key=row['Name'])
             # When the "Draft" button is clicked:
-            if draft_button:
-                set_draft_status(fantasy_data, row['Name'], True)
-                fantasy_data.to_csv(csv_path, index=False)
-                # Remove the suggested player if he's drafted
-                if row['Name'] == st.session_state.suggested_player_name:
-                    del st.session_state.suggested_player_name
+        if draft_button:
+            set_draft_status(fantasy_data, row['Name'], True, my_draft_position=my_draft_position, num_users=num_users)
+            fantasy_data.to_csv(csv_path, index=False)
+            # Update the suggested pick
+            next_suggested_player = suggest_pick(fantasy_data, my_draft_position, num_users)
+            st.experimental_rerun()  # Rerun the app to update the suggested pick
         
         with col3:
             # Add a "Draft to My Team" button for each player
             my_team_button = st.button(f"Draft {row['Name']} to My Team", key=f"MyTeam_{row['Name']}")
             if my_team_button:
-                set_draft_status(fantasy_data, row['Name'], True, to_my_team=True)
+                set_draft_status(fantasy_data, row['Name'], True, to_my_team=True, my_draft_position=my_draft_position, num_users=num_users)
                 fantasy_data.to_csv(csv_path, index=False)
                 st.write(f"{row['Name']} has been drafted to your team!")
                 # Remove the suggested player if he's drafted
