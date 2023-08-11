@@ -90,22 +90,14 @@ def suggest_pick(df, my_draft_position, num_users):
         'RB': 2,
         'TE': 1,
         'FLEX': 1,
-        'DST': 1,
+        'DEF': 1,
         'K': 1
     }
 
     # Check current composition of your team
     my_team = df[df['my_team'] == True]
-    for position in ['QB', 'WR', 'RB', 'TE', 'DST', 'K']:
+    for position in ['QB', 'WR', 'RB', 'TE', 'DEF', 'K']:
         roster_constraints[position] -= len(my_team[my_team['Position'] == position])
-
-    # If Flex hasn't been filled, check for best available between WR, RB, TE
-    if roster_constraints['FLEX'] > 0:
-        potential_flex = my_team[(my_team['Position'] == 'WR') | 
-                                (my_team['Position'] == 'RB') | 
-                                (my_team['Position'] == 'TE')]
-        if len(potential_flex) < 3:  # 2 WRs + 1 RB or 2 RBs + 1 WR would fill the Flex
-            roster_constraints['TE'] -= len(potential_flex)
 
     total_drafted_players = df[df['is_drafted'] == True].shape[0]
     current_round = (total_drafted_players // num_users) + 1
@@ -116,22 +108,29 @@ def suggest_pick(df, my_draft_position, num_users):
     else:  # Even rounds
         picks_before_your_turn = num_users - (total_drafted_players % num_users) + my_draft_position
 
-    # Get undrafted players sorted by projected points
-    undrafted_players = df[df['is_drafted'] == False].sort_values(by='ProjectedFantasyPoints', ascending=False).reset_index(drop=True)
+    # Calculate the next draft position
+    next_draft_position = total_drafted_players + picks_before_your_turn
 
-    # Start at the player projected to go around your draft position and check for the first player that fills an immediate need
-    starting_index = my_draft_position - 1
-    for index in range(starting_index, len(undrafted_players)):
-        player = undrafted_players.iloc[index]
-        position = player['Position']
-        if roster_constraints[position] > 0:  # This player fills a need
-            return player
-        if position in ['WR', 'RB', 'TE'] and roster_constraints['FLEX'] > 0:  # This player can be used in a FLEX position
-            return player
+    # Get undrafted players
+    undrafted_players = df[df['is_drafted'] == False].reset_index(drop=True)
 
-    return None  # In case all positions are filled
+    # Score each player based on projected points, difference from ADP to next draft position, and team needs
+    def calculate_score(row):
+        base_score = row['ProjectedFantasyPoints']
+        adp_difference = max(0, (num_users - abs(row['AverageDraftPositionPPR'] - next_draft_position)))
+        position_need = 2 if roster_constraints[row['Position']] > 0 else 1
+        flex_potential = 1.5 if row['Position'] in ['WR', 'RB', 'TE'] and roster_constraints['FLEX'] > 0 else 1
+        return base_score * adp_difference * position_need * flex_potential
 
+    undrafted_players['Score'] = undrafted_players.apply(calculate_score, axis=1)
 
+    # Return the player with the highest score
+    best_player = undrafted_players.sort_values(by='Score', ascending=False).iloc[0]
+    
+    # Store the suggested player's name in the session state to keep suggesting the same player
+    st.session_state.suggested_player_name = best_player['Name']
+    
+    return best_player
 
 # Streamlit
 def main():
@@ -160,7 +159,7 @@ def main():
     ]
 
     # Sort by ProjectedFantasyPoints and get the top 20 players
-    top_20_players = filtered_data.sort_values(by='ProjectedFantasyPoints', ascending=False).head(20)
+    top_20_players = filtered_data.sort_values(by='AverageDraftPositionPPR', ascending=True).head(20)
 
     # Display drafted players in a separate table, sorted by draft order
     fantasy_data['draft_order'] = pd.to_numeric(fantasy_data['draft_order'], errors='coerce')
