@@ -77,60 +77,84 @@ def set_draft_status(df, player_name, drafted, to_my_team=False, my_draft_positi
         df.at[player_index, 'draft_order'] = None
         df.at[player_index, 'my_team'] = False
 
+def get_my_team(df):
+    """Returns the user's team from the DataFrame."""
+    return df[df['my_team'] == True]
 
-def suggest_pick(df, my_draft_position, num_users):
-    # If we have a current suggested player and he's still undrafted, suggest him again
-    if 'suggested_player_name' in st.session_state and st.session_state.suggested_player_name in df['Name'].values and not df[df['Name'] == st.session_state.suggested_player_name].iloc[0]['is_drafted']:
-        return df[df['Name'] == st.session_state.suggested_player_name].iloc[0]
-
-    # Set positional constraints
+def get_roster_constraints(my_team):
+    """Returns the remaining roster constraints based on the user's team."""
     roster_constraints = {
         'QB': 1,
         'WR': 2,
         'RB': 2,
         'TE': 1,
         'FLEX': 1,
-        'DEF': 1,
+        'DST': 1,
         'K': 1
     }
 
-    # Check current composition of your team
-    my_team = df[df['my_team'] == True]
-    for position in ['QB', 'WR', 'RB', 'TE', 'DEF', 'K']:
+    for position in ['QB', 'WR', 'RB', 'TE', 'DST', 'K']:
         roster_constraints[position] -= len(my_team[my_team['Position'] == position])
 
+    return roster_constraints
+
+def update_roster_constraints_for_flex(my_team, roster_constraints):
+    """Updates the roster constraints considering the flex position."""
+    if roster_constraints['FLEX'] > 0:
+        potential_flex = my_team[(my_team['Position'] == 'WR') | 
+                                (my_team['Position'] == 'RB') | 
+                                (my_team['Position'] == 'TE')]
+        if len(potential_flex) < 3:  # 2 WRs + 1 RB or 2 RBs + 1 WR would fill the Flex
+            roster_constraints['TE'] -= len(potential_flex)
+    return roster_constraints
+
+def get_picks_before_your_turn(df, my_draft_position, num_users):
+    """Returns the number of picks before the user's turn."""
     total_drafted_players = df[df['is_drafted'] == True].shape[0]
     current_round = (total_drafted_players // num_users) + 1
 
-    # Determine the number of picks before your turn
     if current_round % 2 == 1:  # Odd rounds
-        picks_before_your_turn = my_draft_position - (total_drafted_players % num_users)
+        return my_draft_position - (total_drafted_players % num_users)
     else:  # Even rounds
-        picks_before_your_turn = num_users - (total_drafted_players % num_users) + my_draft_position
-
-    # Calculate the next draft position
-    next_draft_position = total_drafted_players + picks_before_your_turn
-
-    # Get undrafted players
-    undrafted_players = df[df['is_drafted'] == False].reset_index(drop=True)
-
-    # Score each player based on projected points, difference from ADP to next draft position, and team needs
-    def calculate_score(row):
-        base_score = row['ProjectedFantasyPoints']
-        adp_difference = max(0, (num_users - abs(row['AverageDraftPositionPPR'] - next_draft_position)))
-        position_need = 2 if roster_constraints[row['Position']] > 0 else 1
-        flex_potential = 1.5 if row['Position'] in ['WR', 'RB', 'TE'] and roster_constraints['FLEX'] > 0 else 1
-        return base_score * adp_difference * position_need * flex_potential
-
-    undrafted_players['Score'] = undrafted_players.apply(calculate_score, axis=1)
-
-    # Return the player with the highest score
-    best_player = undrafted_players.sort_values(by='Score', ascending=False).iloc[0]
+        return num_users - (total_drafted_players % num_users) + my_draft_position
     
-    # Store the suggested player's name in the session state to keep suggesting the same player
-    st.session_state.suggested_player_name = best_player['Name']
-    
-    return best_player
+def suggest_pick(df, my_draft_position, num_users):
+    # If we have a current suggested player and he's still undrafted, suggest him again
+    if 'suggested_player_name' in st.session_state and st.session_state.suggested_player_name in df['Name'].values and not df[df['Name'] == st.session_state.suggested_player_name].iloc[0]['is_drafted']:
+        return df[df['Name'] == st.session_state.suggested_player_name].iloc[0]
+
+    # Get user's team and the remaining roster constraints
+    my_team = get_my_team(df)
+    roster_constraints = get_roster_constraints(my_team)
+    roster_constraints = update_roster_constraints_for_flex(my_team, roster_constraints)
+
+    picks_before_your_turn = get_picks_before_your_turn(df, my_draft_position, num_users)
+
+    st.markdown(f"Picks to go: {picks_before_your_turn}", unsafe_allow_html=True)
+
+    # Normalize ProjectedFantasyPoints and AverageDraftPositionPPR
+    df['NormalizedPoints'] = (df['ProjectedFantasyPoints'] - df['ProjectedFantasyPoints'].min()) / (df['ProjectedFantasyPoints'].max() - df['ProjectedFantasyPoints'].min())
+    df['NormalizedADP'] = 1 - (df['AverageDraftPositionPPR'] - df['AverageDraftPositionPPR'].min()) / (df['AverageDraftPositionPPR'].max() - df['AverageDraftPositionPPR'].min())
+
+    # Combine the normalized scores
+    weight_points = 2
+    weight_adp = 1
+    df['CombinedScore'] = weight_points * df['NormalizedPoints'] - weight_adp * df['NormalizedADP']
+
+    # Get undrafted players sorted by combined score
+    undrafted_players = df[df['is_drafted'] == False].sort_values(by='CombinedScore', ascending=False).reset_index(drop=True)
+
+    # Start at the player projected to go around your draft position and check for the first player that fills an immediate need
+    starting_index = my_draft_position - 1
+    for index in range(starting_index, len(undrafted_players)):
+        player = undrafted_players.iloc[index]
+        position = player['Position']
+        if roster_constraints[position] > 0:  # This player fills a need
+            return player
+        if position in ['WR', 'RB', 'TE'] and roster_constraints['FLEX'] > 0:  # This player can be used in a FLEX position
+            return player
+
+    return None  # In case all positions are filled
 
 # Streamlit
 def main():
